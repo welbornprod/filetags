@@ -35,11 +35,12 @@ SCRIPTDIR = os.path.abspath(sys.path[0])
 USAGESTR = """{versionstr}
     Usage:
         {script} -h | -V
-        {script} [-A | -t] [-l] FILE... [-I | -q] [-N]
-        {script} (-a tag | -c msg | -d tag) [-l] FILE... [-I | -q] [-N]
-        {script} (-C | -r | -x) [-l] FILE... [-I | -q] [-N]
-        {script} -s pat [-C] [-D | -F] [-l] [-n] [-R] [-v] [-I | -q] [-N]
-        {script} -s pat  FILE... [-C] [-D | -F] [-l] [-n] [-v] [-I | -q] [-N]
+        {script} [-A | -t] FILE...              [-l] [-D | -F] [-I | -q] [-N]
+        {script} (-a tag | -d tag) FILE...      [-l] [-D | -F] [-I | -q] [-N]
+        {script} -c msg FILE...                 [-l] [-D | -F] [-I | -q] [-N]
+        {script} (-C | -r | -x) FILE...         [-l] [-D | -F] [-I | -q] [-N]
+        {script} [-C] -s pat [-n] [-R] [-v]     [-l] [-D | -F] [-I | -q] [-N]
+        {script} [-C] -s pat  FILE... [-n] [-v] [-l] [-D | -F] [-I | -q] [-N]
 
     Options:
         FILE                  : One or more file names.
@@ -51,8 +52,8 @@ USAGESTR = """{versionstr}
                                 search is used.
         -d tag,--remove tag   : Remove an existing tag.
                                 Several comma-separated tags can be used.
-        -D,--dirs             : Use directories only.
-        -F,--files            : Use files only.
+        -D,--dirs             : Filter all file paths, using directories only.
+        -F,--files            : Filter all file paths, using files only.
         -h,--help             : Show this help message.
         -I,--debug            : Print debugging info.
         -l,--symlinks         : Follow symlinks.
@@ -515,7 +516,9 @@ def parse_filenames(filenames, pathfilter=None):
             validnames.add(fullpath)
         else:
             raise RuntimeError('Invalid PathFilter enum value!')
-    debug('User file names: {}'.format(len(validnames)))
+    debug('User file names: {}, Filter: {}'.format(
+        len(validnames),
+        pathfilter))
     return validnames
 
 
