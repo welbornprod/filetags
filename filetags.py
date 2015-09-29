@@ -10,7 +10,7 @@
         done
 
         Or this:
-        find -name "*.py" -exec filetags -n -s "script" "{}" +
+            find -name "*.py" -exec filetags -n -s "script" "{}" +
 
     -Christopher Welborn 09-27-2015
 """
@@ -20,13 +20,14 @@ import os
 import re
 import sys
 from contextlib import suppress
+from enum import Enum
 
 import xattr
 from colr import Colr as C
 from docopt import docopt
 
 NAME = 'File Tags'
-VERSION = '0.0.2'
+VERSION = '0.0.3'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 SCRIPTDIR = os.path.abspath(sys.path[0])
@@ -34,10 +35,11 @@ SCRIPTDIR = os.path.abspath(sys.path[0])
 USAGESTR = """{versionstr}
     Usage:
         {script} -h | -V
-        {script} [-A | -t] [-l] FILE... [-D | -q] [-N]
-        {script} (-a tag | -c msg | -d tag) [-l] FILE... [-D | -q] [-N]
-        {script} (-C | -r | -x) [-l] FILE... [-D | -q] [-N]
-        {script} -s pat [-C] [-l] [-n] [FILE... | -R] [-v] [-D | -q] [-N]
+        {script} [-A | -t] [-l] FILE... [-I | -q] [-N]
+        {script} (-a tag | -c msg | -d tag) [-l] FILE... [-I | -q] [-N]
+        {script} (-C | -r | -x) [-l] FILE... [-I | -q] [-N]
+        {script} -s pat [-C] [-D | -F] [-l] [-n] [-R] [-v] [-I | -q] [-N]
+        {script} -s pat  FILE... [-C] [-D | -F] [-l] [-n] [-v] [-I | -q] [-N]
 
     Options:
         FILE                  : One or more file names.
@@ -49,8 +51,10 @@ USAGESTR = """{versionstr}
                                 search is used.
         -d tag,--remove tag   : Remove an existing tag.
                                 Several comma-separated tags can be used.
-        -D,--debug            : Print debugging info.
+        -D,--dirs             : Use directories only.
+        -F,--files            : Use files only.
         -h,--help             : Show this help message.
+        -I,--debug            : Print debugging info.
         -l,--symlinks         : Follow symlinks.
         -n,--names            : Print names only when searching.
         -N,--nocolor          : Don't colorize output.
@@ -64,7 +68,8 @@ USAGESTR = """{versionstr}
         -R,--recurse          : Recurse all sub-directories when searching.
                                 When not used, only files in the current
                                 directory are searched.
-        -s pat,--search pat   : Search tags for text/regex pattern.
+        -s pat,--search pat   : Search for text/regex pattern in tags, or
+                                comments when -C is used.
         -t,--tags             : List all tags.
         -v,--reverse          : Show files that don't match the search.
         -V,--version          : Show version.
@@ -87,13 +92,18 @@ NOERRCOLOR = not sys.stderr.isatty()
 
 def main(argd):
     """ Main entry point, expects doctopt arg dict as argd. """
-    filenames = parse_filenames(argd['FILE'])
+    pathfilter = PathFilter.from_argd(argd)
+    filenames = parse_filenames(
+        argd['FILE'],
+        pathfilter=pathfilter
+    )
     if argd['--search']:
         return search(
             comments=argd['--comments'],
             filenames=filenames,
             pattern=argd['--search'],
             names_only=argd['--names'],
+            pathfilter=pathfilter,
             recurse=argd['--recurse'],
             reverse=argd['--reverse'],
             symlink=argd['--symlinks']
@@ -247,7 +257,7 @@ def format_file_attrs(filename, attrvals):
     """ Return a formatted file name and attribute name/values dict
         as str.
     """
-    valfmt = '{:>20}: {}'.format
+    valfmt = '{:>24}: {}'.format
     if NOCOLOR:
         vals = '\n   '.join(
             valfmt(k, v) for k, v in attrvals.items()
@@ -281,9 +291,13 @@ def format_file_comment(filename, comment, label=None):
 
 def format_file_name(filename, label=None):
     """ Return a formatted file name string. """
+    if NOCOLOR:
+        return filename
+
+    style = 'bright' if os.path.isdir(filename) else 'normal'
     return ''.join((
         '{} '.format(label) if label else '',
-        filename if NOCOLOR else str(C(filename, fore='blue'))
+        str(C(filename, fore='blue', style=style))
     ))
 
 
@@ -358,24 +372,39 @@ def get_comment(filename, symlink=False):
     return rawtext.decode()
 
 
-def get_filenames(recurse=False):
+def get_filenames(recurse=False, pathfilter=None):
     """ Yield file paths in the current directory.
         If recurse is True, walk the current directory yielding paths.
     """
+    pathfilter = pathfilter or PathFilter.none
 
     cwd = os.getcwd()
-    debug('Getting file names from: {}'.format(cwd))
+    debug('\n'.join((
+        'Getting file names from: {}',
+        '              Filtering: {}'
+    )).format(cwd, pathfilter))
+
     if recurse:
         try:
             for root, dirs, files in os.walk(cwd):
-                for filename in files:
-                    fullpath = os.path.join(root, filename)
-                    yield fullpath
+                if pathfilter != PathFilter.files:
+                    yield from (os.path.join(root, s) for s in dirs)
+                if pathfilter != PathFilter.dirs:
+                    yield from (os.path.join(root, s) for s in files)
         except EnvironmentError as ex:
             print_err('Unable to walk directory: {}'.format(cwd), ex)
     else:
+        filterpath = {
+            PathFilter.none: lambda s: True,
+            PathFilter.dirs: os.path.isdir,
+            PathFilter.files: os.path.isfile
+        }.get(pathfilter)
+
         try:
-            yield from (os.path.join(cwd, s) for s in os.listdir(cwd))
+            for path in os.listdir(cwd):
+                fullpath = os.path.join(cwd, path)
+                if filterpath(fullpath):
+                    yield fullpath
         except EnvironmentError as ex:
             print_err('Unable to list directory: {}'.format(cwd), ex)
 
@@ -465,18 +494,27 @@ def list_tags(filenames, symlink=False):
         symlink=symlink)
 
 
-def parse_filenames(filenames):
+def parse_filenames(filenames, pathfilter=None):
     """ Ensure all file names have an absolute path.
         Print any non-existent files.
         Returns a set of full paths.
     """
+    pathfilter = pathfilter or PathFilter.none
+    filterpath = {
+        PathFilter.none: lambda s: True,
+        PathFilter.dirs: os.path.isdir,
+        PathFilter.files: os.path.isfile
+    }.get(pathfilter)
+
     validnames = set()
     for filename in filenames:
         fullpath = os.path.abspath(filename)
         if not os.path.exists(fullpath):
             print_err('File does not exist: {}'.format(fullpath))
-        else:
+        elif filterpath(fullpath):
             validnames.add(fullpath)
+        else:
+            raise RuntimeError('Invalid PathFilter enum value!')
     debug('User file names: {}'.format(len(validnames)))
     return validnames
 
@@ -568,7 +606,8 @@ def remove_tag(filenames, tagstr, symlink=False):
 
 def search(
         comments=False, filenames=None, pattern=None,
-        names_only=False, recurse=False, reverse=False, symlink=False):
+        names_only=False, recurse=False, pathfilter=None,
+        reverse=False, symlink=False):
     """ Run one of the search functions on comments/tags.
         If no file names are given, the current directory is used.
         If recurse is True, the current directory is walked.
@@ -577,7 +616,7 @@ def search(
     if pat is None:
         return 1
     if not filenames:
-        filenames = get_filenames(recurse=recurse)
+        filenames = get_filenames(recurse=recurse, pathfilter=pathfilter)
     searchargs = {
         'names_only': names_only,
         'reverse': reverse,
@@ -730,6 +769,31 @@ def try_repat(s):
         print_err('Invalid pattern: {}'.format(s), ex)
         return None
     return pat
+
+
+class PathFilter(Enum):
+
+    """ File path filter setting. """
+    none = 0
+    dirs = 1
+    files = 2
+
+    def __str__(self):
+        """ Human-friendly string representation for a PathFilter. """
+        return {
+            PathFilter.none.value: 'None',
+            PathFilter.dirs.value: 'Directories',
+            PathFilter.files.value: 'Files'
+        }.get(self.value)
+
+    @classmethod
+    def from_argd(cls, argd):
+        """ Return a PathFilter based on docopt's arg dict. """
+        if argd['--dirs']:
+            return cls.dirs
+        if argd['--files']:
+            return cls.files
+        return cls.none
 
 
 if __name__ == '__main__':
