@@ -19,12 +19,13 @@ Command Help
 
 ```
 Usage:
-    {script} -h | -V
-    {script} [-A | -t] [-l] FILE... [-I | -q] [-N]
-    {script} (-a tag | -c msg | -d tag) [-l] FILE... [-I | -q] [-N]
-    {script} (-C | -r | -x) [-l] FILE... [-I | -q] [-N]
-    {script} -s pat [-C] [-D | -F] [-l] [-n] [-R] [-v] [-I | -q] [-N]
-    {script} -s pat  FILE... [-C] [-D | -F] [-l] [-n] [-v] [-I | -q] [-N]
+    filetags -h | -V
+    filetags [-A | -t] FILE...              [-l] [-D | -F] [-I | -q] [-N]
+    filetags (-a tag | -d tag) FILE...      [-l] [-D | -F] [-I | -q] [-N]
+    filetags -c msg FILE...                 [-l] [-D | -F] [-I | -q] [-N]
+    filetags (-C | -r | -x) FILE...         [-l] [-D | -F] [-I | -q] [-N]
+    filetags [-C] -s pat [-n] [-R] [-v]     [-l] [-D | -F] [-I | -q] [-N]
+    filetags [-C] -s pat  FILE... [-n] [-v] [-l] [-D | -F] [-I | -q] [-N]
 
 Options:
     FILE                  : One or more file names.
@@ -36,8 +37,8 @@ Options:
                             search is used.
     -d tag,--remove tag   : Remove an existing tag.
                             Several comma-separated tags can be used.
-    -D,--dirs             : Use directories only.
-    -F,--files            : Use files only.
+    -D,--dirs             : Filter all file paths, using directories only.
+    -F,--files            : Filter all file paths, using files only.
     -h,--help             : Show this help message.
     -I,--debug            : Print debugging info.
     -l,--symlinks         : Follow symlinks.
@@ -61,7 +62,6 @@ Options:
     -x,--delete           : Delete/clear all tags.
 
 The default action when no flag arguments are present is to list all tags.
-
 ```
 
 Requirements
