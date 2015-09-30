@@ -841,25 +841,10 @@ class PathFilter(Enum):
 if __name__ == '__main__':
     ARGD = docopt(USAGESTR, version=VERSIONSTR)
     DEBUG = ARGD['--debug']
-
     QUIET = ARGD['--quiet']
     if ARGD['--nocolor']:
         # Override automatic detection.
         NOCOLOR = NOERRCOLOR = True
-
-    if DEBUG:
-        # This should never be used in non-debug mode.
-        import json
-
-        def json_str(obj, label=None, sort_keys=False):
-            """ Return a json dump of an object, for debugging. """
-            if label:
-                return '\n'.join((
-                    label,
-                    json.dumps(obj, indent=8, sort_keys=sort_keys)
-                ))
-            return json.dumps(obj, indent=4, sort_keys=sort_keys)
-        print(json_str(ARGD, label='Docopt Args:'))
 
     MAINRET = main(ARGD)
     sys.exit(MAINRET)
