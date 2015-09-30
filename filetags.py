@@ -27,56 +27,63 @@ from colr import Colr as C
 from docopt import docopt
 
 NAME = 'File Tags'
-VERSION = '0.0.3'
+VERSION = '0.1.0'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 SCRIPTDIR = os.path.abspath(sys.path[0])
 
 USAGESTR = """{versionstr}
     Usage:
-        {script} -h | -V
-        {script} [-A | -t] FILE...              [-l] [-D | -F] [-I | -q] [-N]
-        {script} (-a tag | -d tag) FILE...      [-l] [-D | -F] [-I | -q] [-N]
-        {script} -c msg FILE...                 [-l] [-D | -F] [-I | -q] [-N]
-        {script} (-C | -r | -x) FILE...         [-l] [-D | -F] [-I | -q] [-N]
-        {script} [-C] -s pat [-n] [-R] [-v]     [-l] [-D | -F] [-I | -q] [-N]
-        {script} [-C] -s pat  FILE... [-n] [-v] [-l] [-D | -F] [-I | -q] [-N]
+        {script} -h | -v
+        {script} [-A | -c | -t] (FILE... | [-R]) [-l] [-D | -F] [-I | -q] [-N]
+        {script} -a tag (FILE... | [-R])         [-l] [-D | -F] [-I | -q] [-N]
+        {script} -d tag (FILE... | [-R])         [-l] [-D | -F] [-I | -q] [-N]
+        {script} -m comment (FILE... | [-R])     [-l] [-D | -F] [-I | -q] [-N]
+        {script} -C [-c] (FILE... | [-R])        [-l] [-D | -F] [-I | -q] [-N]
+        {script} -s pat [-c] [-n] [-r] [-R]      [-l] [-D | -F] [-I | -q] [-N]
+        {script} -s pat [-c]  FILE... [-n] [-r]  [-l] [-D | -F] [-I | -q] [-N]
 
     Options:
-        FILE                  : One or more file names.
-        -a tag,--add tag      : Add a tag to existing tags.
-                                Several comma-separated tags can be used.
-        -A,--attrs            : List all extended attributes.
-        -c msg,--comment msg  : Set the file comment.
-        -C,--comments         : List all comments, or search comments when
-                                search is used.
-        -d tag,--remove tag   : Remove an existing tag.
-                                Several comma-separated tags can be used.
-        -D,--dirs             : Filter all file paths, using directories only.
-        -F,--files            : Filter all file paths, using files only.
-        -h,--help             : Show this help message.
-        -I,--debug            : Print debugging info.
-        -l,--symlinks         : Follow symlinks.
-        -n,--names            : Print names only when searching.
-        -N,--nocolor          : Don't colorize output.
-                                This is automatically enabled when piping
-                                output.
-        -q,--quiet            : Don't print anything to stdout.
-                                Error messages are still printed to stderr.
-                                This affects all commands, including the list
-                                commands.
-        -r,--removecomment    : Remove the file comment.
-        -R,--recurse          : Recurse all sub-directories when searching.
-                                When not used, only files in the current
-                                directory are searched.
-        -s pat,--search pat   : Search for text/regex pattern in tags, or
-                                comments when -C is used.
-        -t,--tags             : List all tags.
-        -v,--reverse          : Show files that don't match the search.
-        -V,--version          : Show version.
-        -x,--delete           : Delete/clear all tags.
+        FILE                     : One or more file names.
+                                   When not given, all paths in the current
+                                   directory are used. If -R is given instead
+                                   of FILES, the current directory is walked.
+                                   Files and directories can be filtered
+                                   with -F and -D.
+        MSG                      : New comment message when setting comments.
+        -a tag,--add tag         : Add a tag to existing tags.
+                                   Several comma-separated tags can be used.
+        -A,--attrs               : List all extended attributes.
+        -c,--comment             : List file comments,
+                                   search comments when -s is used,
+                                   clear comments when -C is used.
+        -C,--clear               : Clear all tags, or comments when -c is used.
+        -d tag,--delete tag      : Remove an existing tag.
+                                   Several comma-separated tags can be used.
+        -D,--dirs                : Filter all file paths, use directories only.
+        -F,--files               : Filter all file paths, use files only.
+        -h,--help                : Show this help message.
+        -I,--debug               : Print debugging info.
+        -l,--symlinks            : Follow symlinks.
+        -m msg,--setcomment msg  : Set the comment for a file.
+        -n,--names               : Print names only when searching.
+        -N,--nocolor             : Don't colorize output.
+                                   This is automatically enabled when piping
+                                   output.
+        -q,--quiet               : Don't print anything to stdout.
+                                   Error messages are still printed to stderr.
+                                   This affects all commands, including the
+                                   list commands.
+        -r,--reverse             : Show files that don't match the search.
+        -R,--recurse             : Recurse all sub-directories and files.
+        -s pat,--search pat      : Search for text/regex pattern in tags,
+                                   or comments when -c is used.
+        -t,--tags                : List all tags.
+        -v,--version             : Show version.
 
     The default action when no flag arguments are present is to list all tags.
+    When no file names are given, files and directories in the current
+    directory are used. When -R is given, the current directory is recursed.
 """.format(script=SCRIPT, versionstr=VERSIONSTR)
 
 # Global debug flag, set with --debug to print messages.
@@ -98,36 +105,37 @@ def main(argd):
         argd['FILE'],
         pathfilter=pathfilter
     )
+    if not filenames:
+        filenames = get_filenames(
+            recurse=argd['--recurse'],
+            pathfilter=pathfilter)
+
+    symlink = argd['--symlinks']
+
     if argd['--search']:
         return search(
-            comments=argd['--comments'],
+            comments=argd['--comment'],
             filenames=filenames,
             pattern=argd['--search'],
             names_only=argd['--names'],
-            pathfilter=pathfilter,
-            recurse=argd['--recurse'],
             reverse=argd['--reverse'],
-            symlink=argd['--symlinks']
+            symlink=symlink
         )
 
-    # Valid file names required for all other commands.
-    if not filenames:
-        return 1
-    symlink = argd['--symlinks']
     if argd['--add']:
         return add_tag(filenames, argd['--add'], symlink=symlink)
     elif argd['--attrs']:
         return list_attrs(filenames, symlink=symlink)
+    elif argd['--clear']:
+        if argd['--comment']:
+            return clear_comment(filenames, symlink=symlink)
+        return clear_tag(filenames, symlink=symlink)
     elif argd['--comment']:
-        return set_comment(filenames, argd['--comment'], symlink=symlink)
-    elif argd['--comments']:
         return list_comments(filenames, symlink=symlink)
     elif argd['--delete']:
-        return clear_tag(filenames, symlink=symlink)
-    elif argd['--remove']:
-        return remove_tag(filenames, argd['--remove'], symlink=symlink)
-    elif argd['--removecomment']:
-        return remove_comment(filenames, symlink=symlink)
+        return remove_tag(filenames, argd['--delete'], symlink=symlink)
+    elif argd['--setcomment']:
+        return set_comment(filenames, argd['--setcomment'], symlink=symlink)
     elif argd['--tags']:
         return list_tags(filenames, symlink=symlink)
 
@@ -174,22 +182,44 @@ def add_tag(filenames, tagstr, symlink=False):
     return errs
 
 
+def clear_comment(filenames, symlink=False):
+    """ Clear all comments from file names.
+        Return the number of errors.
+    """
+    return clear_xattr(filenames, attrname='user.xdg.comment', symlink=symlink)
+
+
 def clear_tag(filenames, symlink=False):
     """ Clear all tags from file names.
         Return the number of errors.
     """
+    return clear_xattr(filenames, attrname='user.xdg.tags', symlink=symlink)
+
+
+def clear_xattr(filenames, attrname=None, symlink=False):
+    """ Clear an entire extended attribute setting from file names.
+        Return the number of errors.
+    """
+    if not attrname:
+        print_err('No extended attribute name given!')
+        return 1
+    attrtype = attrname.split('.')[-1]
     errs = 0
     for filename in filenames:
         try:
-            xattr.removexattr(filename, 'user.xdg.tags')
+            xattr.removexattr(filename, attrname)
         except EnvironmentError as ex:
             if ex.errno != ENOTAGS:
-                print_err('Unable to clear tags for: {}'.format(filename), ex)
+                print_err(
+                    'Unable to clear {} for: {}'.format(attrtype, filename),
+                    ex)
                 errs += 1
                 continue
-            debug('Tags already cleared: {}'.format(filename))
+            debug('{} already cleared: {}'.format(attrtype.title(), filename))
         # Tags were removed, or did not exist.
-        status(format_file_name(filename, label='Cleared tags for'))
+        status(format_file_name(
+            filename,
+            label='Cleared {} for'.format(attrtype)))
     return errs
 
 
@@ -281,9 +311,11 @@ def format_file_comment(filename, comment, label=None):
     """ Return a formatted file name and comment. """
     if not comment:
         if NOCOLOR:
-            comment = '(none)'
+            comment = '(empty)'
         else:
-            comment = str(C('none', fore='red').join('(', ')', style='bright'))
+            comment = str(
+                C('empty', fore='red').join('(', ')', style='bright')
+            )
     return '{}:\n    {}'.format(
         format_file_name(filename, label=label),
         '\n    '.join(l for l in comment.splitlines())
@@ -311,18 +343,18 @@ def format_file_tags(filename, taglist, label=None):
     )
 
 
-def format_search_cnt(searchtype, total):
+def format_file_cnt(filetype, total):
     """ Return a formatted search result string. """
     if total != 1:
-        searchtype = '{}s'.format(searchtype)
+        filetype = '{}s'.format(filetype)
     if NOCOLOR:
-        return 'Found {} {}.'.format(total, searchtype)
+        return 'Found {} {}.'.format(total, filetype)
 
     return '{}.'.format(
         C(' ').join(
             C('Found', fore='cyan'),
             C(str(total), fore='blue', style='bright'),
-            C(searchtype, fore='cyan')
+            C(filetype, fore='cyan')
         )
     )
 
@@ -385,13 +417,18 @@ def get_filenames(recurse=False, pathfilter=None):
         '              Filtering: {}'
     )).format(cwd, pathfilter))
 
+    cnt = 0
     if recurse:
         try:
             for root, dirs, files in os.walk(cwd):
                 if pathfilter != PathFilter.files:
-                    yield from (os.path.join(root, s) for s in dirs)
+                    for dirname in dirs:
+                        cnt += 1
+                        yield os.path.join(root, dirname)
                 if pathfilter != PathFilter.dirs:
-                    yield from (os.path.join(root, s) for s in files)
+                    for filename in files:
+                        cnt += 1
+                        yield os.path.join(root, filename)
         except EnvironmentError as ex:
             print_err('Unable to walk directory: {}'.format(cwd), ex)
     else:
@@ -405,9 +442,11 @@ def get_filenames(recurse=False, pathfilter=None):
             for path in os.listdir(cwd):
                 fullpath = os.path.join(cwd, path)
                 if filterpath(fullpath):
+                    cnt += 1
                     yield fullpath
         except EnvironmentError as ex:
             print_err('Unable to list directory: {}'.format(cwd), ex)
+    status('\n{}'.format(format_file_cnt('file', cnt)))
 
 
 def get_tags(filename, symlink=False):
@@ -609,8 +648,7 @@ def remove_tag(filenames, tagstr, symlink=False):
 
 def search(
         comments=False, filenames=None, pattern=None,
-        names_only=False, recurse=False, pathfilter=None,
-        reverse=False, symlink=False):
+        names_only=False, reverse=False, symlink=False):
     """ Run one of the search functions on comments/tags.
         If no file names are given, the current directory is used.
         If recurse is True, the current directory is walked.
@@ -618,8 +656,7 @@ def search(
     pat = try_repat(pattern)
     if pat is None:
         return 1
-    if not filenames:
-        filenames = get_filenames(recurse=recurse, pathfilter=pathfilter)
+
     searchargs = {
         'names_only': names_only,
         'reverse': reverse,
@@ -662,7 +699,7 @@ def search_comments(
             found += 1
 
     if not names_only:
-        status('\n{}'.format(format_search_cnt('comment', found)))
+        status('\n{}'.format(format_file_cnt('comment', found)))
     return errs
 
 
@@ -683,8 +720,6 @@ def search_tags(
         if tags is None:
             errs += 1
             continue
-        elif not tags:
-            continue
 
         if tag_match(repat, tags, reverse=reverse):
             found += 1
@@ -694,7 +729,7 @@ def search_tags(
                 status(format_file_tags(filename, tags))
 
     if not names_only:
-        status('\n{}'.format(format_search_cnt('tag', found)))
+        status('\n{}'.format(format_file_cnt('tag', found)))
     return errs
 
 
@@ -757,7 +792,11 @@ def tag_match(repat, taglist, reverse=False):
         If reverse is used, return True when none of the tags match.
     """
     if reverse:
+        if not taglist:
+            return repat.search('') is None
         return all((repat.search(s) is None) for s in taglist)
+    if not taglist:
+        return repat.search('') is not None
     return any((repat.search(s) is not None) for s in taglist)
 
 
@@ -802,9 +841,25 @@ class PathFilter(Enum):
 if __name__ == '__main__':
     ARGD = docopt(USAGESTR, version=VERSIONSTR)
     DEBUG = ARGD['--debug']
+
     QUIET = ARGD['--quiet']
     if ARGD['--nocolor']:
         # Override automatic detection.
         NOCOLOR = NOERRCOLOR = True
+
+    if DEBUG:
+        # This should never be used in non-debug mode.
+        import json
+
+        def json_str(obj, label=None, sort_keys=False):
+            """ Return a json dump of an object, for debugging. """
+            if label:
+                return '\n'.join((
+                    label,
+                    json.dumps(obj, indent=8, sort_keys=sort_keys)
+                ))
+            return json.dumps(obj, indent=4, sort_keys=sort_keys)
+        print(json_str(ARGD, label='Docopt Args:'))
+
     MAINRET = main(ARGD)
     sys.exit(MAINRET)

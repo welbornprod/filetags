@@ -6,62 +6,73 @@ Linux command to easily edit the extended attributes,
 These are used by applications like [KDE]'s [Dolphin], [Baloo] and
 others to tag files with keywords for searching/organizing later.
 
-
 This tool can view, set, remove, clear, and search both tags and comments.
-Tags and comments are encoded (to bytes) when saving them. Tags are sorted
-and comma separated.
+Tags and comments are encoded using the system's defaut encoding when saving.
+Tags are also sorted and comma separated.
 
 Output is colorized unless it is being piped or `--nocolor` is used.
 The output can be silenced using `--quiet`, in case only the exit code matters.
+
+Operates on all paths in the current directory unless file names are given.
+The current directory can be recursed also.
+Paths can be filtered (files only, or dirs only) whether they are user
+provided or not.
 
 Command Help
 ------------
 
 ```
 Usage:
-    filetags -h | -V
-    filetags [-A | -t] FILE...              [-l] [-D | -F] [-I | -q] [-N]
-    filetags (-a tag | -d tag) FILE...      [-l] [-D | -F] [-I | -q] [-N]
-    filetags -c msg FILE...                 [-l] [-D | -F] [-I | -q] [-N]
-    filetags (-C | -r | -x) FILE...         [-l] [-D | -F] [-I | -q] [-N]
-    filetags [-C] -s pat [-n] [-R] [-v]     [-l] [-D | -F] [-I | -q] [-N]
-    filetags [-C] -s pat  FILE... [-n] [-v] [-l] [-D | -F] [-I | -q] [-N]
+    filetags -h | -v
+    filetags [-A | -c | -t] (FILE... | [-R]) [-l] [-D | -F] [-I | -q] [-N]
+    filetags -a tag (FILE... | [-R])         [-l] [-D | -F] [-I | -q] [-N]
+    filetags -d tag (FILE... | [-R])         [-l] [-D | -F] [-I | -q] [-N]
+    filetags -m comment (FILE... | [-R])     [-l] [-D | -F] [-I | -q] [-N]
+    filetags -C [-c] (FILE... | [-R])        [-l] [-D | -F] [-I | -q] [-N]
+    filetags -s pat [-c] [-n] [-r] [-R]      [-l] [-D | -F] [-I | -q] [-N]
+    filetags -s pat [-c]  FILE... [-n] [-r]  [-l] [-D | -F] [-I | -q] [-N]
 
 Options:
-    FILE                  : One or more file names.
-    -a tag,--add tag      : Add a tag to existing tags.
-                            Several comma-separated tags can be used.
-    -A,--attrs            : List all extended attributes.
-    -c msg,--comment msg  : Set the file comment.
-    -C,--comments         : List all comments, or search comments when
-                            search is used.
-    -d tag,--remove tag   : Remove an existing tag.
-                            Several comma-separated tags can be used.
-    -D,--dirs             : Filter all file paths, using directories only.
-    -F,--files            : Filter all file paths, using files only.
-    -h,--help             : Show this help message.
-    -I,--debug            : Print debugging info.
-    -l,--symlinks         : Follow symlinks.
-    -n,--names            : Print names only when searching.
-    -N,--nocolor          : Don't colorize output.
-                            This is automatically enabled when piping
-                            output.
-    -q,--quiet            : Don't print anything to stdout.
-                            Error messages are still printed to stderr.
-                            This affects all commands, including the list
-                            commands.
-    -r,--removecomment    : Remove the file comment.
-    -R,--recurse          : Recurse all sub-directories when searching.
-                            When not used, only files in the current
-                            directory are searched.
-    -s pat,--search pat   : Search for text/regex pattern in tags, or
-                            comments when -C is used.
-    -t,--tags             : List all tags.
-    -v,--reverse          : Show files that don't match the search.
-    -V,--version          : Show version.
-    -x,--delete           : Delete/clear all tags.
+    FILE                     : One or more file names.
+                               When not given, all paths in the current
+                               directory are used. If -R is given instead
+                               of FILES, the current directory is walked.
+                               Files and directories can be filtered
+                               with -F and -D.
+    MSG                      : New comment message when setting comments.
+    -a tag,--add tag         : Add a tag to existing tags.
+                               Several comma-separated tags can be used.
+    -A,--attrs               : List all extended attributes.
+    -c,--comment             : List file comments,
+                               search comments when -s is used,
+                               clear comments when -C is used.
+    -C,--clear               : Clear all tags, or comments when -c is used.
+    -d tag,--delete tag      : Remove an existing tag.
+                               Several comma-separated tags can be used.
+    -D,--dirs                : Filter all file paths, use directories only.
+    -F,--files               : Filter all file paths, use files only.
+    -h,--help                : Show this help message.
+    -I,--debug               : Print debugging info.
+    -l,--symlinks            : Follow symlinks.
+    -m msg,--setcomment msg  : Set the comment for a file.
+    -n,--names               : Print names only when searching.
+    -N,--nocolor             : Don't colorize output.
+                               This is automatically enabled when piping
+                               output.
+    -q,--quiet               : Don't print anything to stdout.
+                               Error messages are still printed to stderr.
+                               This affects all commands, including the
+                               list commands.
+    -r,--reverse             : Show files that don't match the search.
+    -R,--recurse             : Recurse all sub-directories and files.
+    -s pat,--search pat      : Search for text/regex pattern in tags,
+                               or comments when -c is used.
+    -t,--tags                : List all tags.
+    -v,--version             : Show version.
 
 The default action when no flag arguments are present is to list all tags.
+When no file names are given, files and directories in the current
+directory are used. When -R is given, the current directory is recursed.
 ```
 
 Requirements
@@ -93,7 +104,7 @@ installed, and symlink it to a directory in `$PATH`:
 ```
 cd path_to_filetags
 chmod +x filetags.py
-ln -s "$PWD/filetags.py" ~/.local/bin
+ln -s "$PWD/filetags.py" ~/.local/bin/filetags
 ```
 
 Examples
@@ -111,10 +122,12 @@ $ filetags *.py
     script
 ```
 
+This is the same as `filetags -t *.py`.
+
 ####View file comment:
 
 ```
-$ filetags -C *.py
+$ filetags -c *.py
 /home/me/scripts/filetags.py:
     Edit one or more file tags and comments.
 ```
@@ -169,14 +182,16 @@ $ filetags -d 'test,this'
 ####Clear all tags for a file:
 
 ```
-$ filetags -x filetags.py
+$ filetags -C filetags.py
 Cleared tags for /home/me/scripts/filetags.py
 ```
+
+You can add a `-c` to clear comments.
 
 ####Change the comment for a file:
 
 ```
-$ filetags -c 'Editor for file tags and comments.' *.py
+$ filetags -m 'Editor for file tags and comments.' *.py
 Set comment for /home/me/scripts/filetags.py:
     Editor for file tags and comments.
 ```
@@ -210,7 +225,7 @@ Found 2 tags.
 ####Search comments:
 
 ```
-$ filetags -C -s 'things|stuff'
+$ filetags -c -s '(things)|(stuff)'
 /home/me/scripts/mydirectory:
     My directory for holding things.
 /home/me/scripts/mythings.py:
@@ -227,10 +242,10 @@ anything you would want to do with file tags. For example, to list all files
 with 'test' in their name that are not tagged with 'test':
 
 ```bash
-$ find -name "*test*" -exec filetags -s test -v -n "{}" +
+$ find -name "*test*" -exec filetags -s test -r -n "{}" +
 ```
 
-...where `-n` means 'print names only', and `-v` means 'reverse search'.
+...where `-n` means 'print names only', and `-r` means 'reverse search'.
 
 Or if you don't care about the output, you can check the exit code:
 
