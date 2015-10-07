@@ -21,13 +21,14 @@ import re
 import sys
 from contextlib import suppress
 from enum import Enum
+from pathlib import Path
 
 import xattr
 from colr import Colr as C
 from docopt import docopt
 
 NAME = 'File Tags'
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 SCRIPTDIR = os.path.abspath(sys.path[0])
@@ -143,42 +144,30 @@ def main(argd):
     return list_tags(filenames, symlink=symlink)
 
 
-def add_file_tag(filename, taglist, symlink=False):
-    """ Add a list of tags to a file.
-        Returns the final tag list on success, or None on error.
-    """
-    existing = get_tags(filename, symlink=symlink)
-    if existing is None:
-        return None
-    debug('Existing tags for {}: {!r}'.format(filename, existing))
-    finaltags = existing[:]
-    finaltags.extend(taglist)
-    finaltags = sorted(set(finaltags))
-    if finaltags == existing:
-        debug('Tags already set to: {!r}'.format(finaltags))
-        return finaltags
-
-    if not set_tags(filename, sorted(set(finaltags)), symlink=symlink):
-        return None
-    return finaltags
-
-
 def add_tag(filenames, tagstr, symlink=False):
     """ Add a tag or tags to file names.
         Return the number of errors.
     """
     errs = 0
-    tags = parse_tagstr(tagstr)
-    if not tags:
-        print_err('No tags to set!: {}'.format(tagstr))
+    try:
+        tags = Editor.parse_tagstr(tagstr)
+    except ValueError as ex:
+        print_err(ex)
         return 1
 
     for filename in filenames:
-        settags = add_file_tag(filename, tags, symlink=symlink)
-        if settags is None:
+        editor = Editor(filename, symlink=symlink)
+        try:
+            settags = editor.add_tags(tags)
+        except Editor.AttrError as ex:
+            print_err(ex)
             errs += 1
             continue
-        status(format_file_tags(filename, settags, label='Set tags for'))
+        status(
+            format_file_tags(
+                editor.filepath,
+                settags,
+                label='Set tags for'))
     return errs
 
 
@@ -186,14 +175,20 @@ def clear_comment(filenames, symlink=False):
     """ Clear all comments from file names.
         Return the number of errors.
     """
-    return clear_xattr(filenames, attrname='user.xdg.comment', symlink=symlink)
+    return clear_xattr(
+        filenames,
+        attrname=Editor.attr_comment,
+        symlink=symlink)
 
 
 def clear_tag(filenames, symlink=False):
     """ Clear all tags from file names.
         Return the number of errors.
     """
-    return clear_xattr(filenames, attrname='user.xdg.tags', symlink=symlink)
+    return clear_xattr(
+        filenames,
+        attrname=Editor.attr_tags,
+        symlink=symlink)
 
 
 def clear_xattr(filenames, attrname=None, symlink=False):
@@ -206,19 +201,18 @@ def clear_xattr(filenames, attrname=None, symlink=False):
     attrtype = attrname.split('.')[-1]
     errs = 0
     for filename in filenames:
+        editor = Editor(filename, symlink=symlink)
         try:
-            xattr.removexattr(filename, attrname)
-        except EnvironmentError as ex:
+            editor.remove_attr(attrname)
+        except Editor.AttrError as ex:
             if ex.errno != ENOTAGS:
-                print_err(
-                    'Unable to clear {} for: {}'.format(attrtype, filename),
-                    ex)
+                print_err(ex)
                 errs += 1
                 continue
-            debug('{} already cleared: {}'.format(attrtype.title(), filename))
+
         # Tags were removed, or did not exist.
         status(format_file_name(
-            filename,
+            editor.filepath,
             label='Cleared {} for'.format(attrtype)))
     return errs
 
@@ -288,7 +282,7 @@ def format_file_attrs(filename, attrvals):
     """ Return a formatted file name and attribute name/values dict
         as str.
     """
-    valfmt = '{:>24}: {}'.format
+    valfmt = '{:>35}: {}'.format
     if NOCOLOR:
         vals = '\n   '.join(
             valfmt(k, v) for k, v in attrvals.items()
@@ -372,39 +366,6 @@ def format_tags(taglist):
     return tags
 
 
-def get_attr_values(filename, symlink=False):
-    """ Retrieve all attributes and values for a file name.
-        Returns None on error, and a dict of {attrname: value} on success.
-    """
-    try:
-        attrs = xattr.listxattr(filename, symlink=symlink)
-    except EnvironmentError as ex:
-        print_err(
-            'Unable to list attributes for file: {}'.format(filename),
-            ex)
-        return None
-    return {
-        aname: get_value(filename, aname, symlink=symlink)
-        for aname in attrs
-    }
-
-
-def get_comment(filename, symlink=False):
-    """ Return the comment for a file.
-        Returns None on error.
-    """
-    try:
-        rawtext = xattr.getxattr(filename, 'user.xdg.comment', symlink=symlink)
-    except EnvironmentError as ex:
-        if ex.errno != ENOCOMMENT:
-            print_err('Unable to get comment for: {}'.format(filename), ex)
-            return None
-        # Comment was blank/not set.
-        return ''
-
-    return rawtext.decode()
-
-
 def get_filenames(recurse=False, pathfilter=None):
     """ Yield file paths in the current directory.
         If recurse is True, walk the current directory yielding paths.
@@ -449,66 +410,40 @@ def get_filenames(recurse=False, pathfilter=None):
     status('\n{}'.format(format_file_cnt('file', cnt)))
 
 
-def get_tags(filename, symlink=False):
-    """ Return a list of all file tags for a file.
-        Returns None on error, and a list for success (even an empty list).
-    """
-    try:
-        tagstr = xattr.getxattr(filename, 'user.xdg.tags', symlink=symlink)
-    except EnvironmentError as ex:
-        if ex.errno != ENOTAGS:
-            print_err('Error getting tags for: {}'.format(filename), ex)
-            return None
-        debug('No tags for: {}'.format(filename), ex=ex)
-        return []
-    tags = (s.strip() for s in tagstr.decode().split(','))
-    return sorted(s for s in tags if s)
-
-
-def get_value(filename, attrname, symlink=False):
-    """ Retrieve the value for a known attribute name. """
-    try:
-        val = xattr.getxattr(filename, attrname, symlink=symlink)
-    except EnvironmentError as ex:
-        print_err(
-            'Unable to get value for `{}` in: {}'.format(attrname, filename),
-            ex)
-        return ''
-    return val.decode()
-
-
 def list_attrs(filenames, symlink=False):
     """ List raw attributes and values for file names.
         Returns the number of errors.
     """
     return list_action(
         filenames,
-        get_attr_values,
+        'get_attrs',
         format_file_attrs,
         symlink=symlink)
 
 
-def list_action(filenames, value_func, format_func, symlink=False):
+def list_action(filenames, value_func_name, format_func, symlink=False):
     """ Run an action for the 'list' commands.
         Arguments:
-            filenames    : An iterable of valid file names.
-            value_func   : A function to return values for the filename,
-                           which is passed on to the format_func.
-                           See: get_tags() and get_attr_values()
-            format_func  : A function to format a filename and values.
-                           See: format_file_attrs() and format_file_tags()
-            symlink      : Whether to follow symlinks, a kwarg for
-                           value_func.
+            filenames         : An iterable of valid file names.
+            values_func_name  : Name of Editor method to get values.
+            format_func       : A function to format a filename and values.
+                                See: format_file_attrs() and format_file_tags()
+            symlink           : Whether to follow symlinks, a kwarg for
+                                value_func.
 
         Returns the number of errors.
     """
     errs = 0
     for filename in filenames:
-        values = value_func(filename, symlink=symlink)
-        if values is None:
+        editor = Editor(filename, symlink=symlink)
+        value_func = getattr(editor, value_func_name)
+        try:
+            values = value_func()
+        except Editor.AttrError as ex:
+            print_err(ex)
             errs += 1
             continue
-        status(format_func(filename, values))
+        status(format_func(editor.filepath, values))
     return errs
 
 
@@ -518,7 +453,7 @@ def list_comments(filenames, symlink=False):
     """
     return list_action(
         filenames,
-        get_comment,
+        'get_comment',
         format_file_comment,
         symlink=symlink)
 
@@ -529,7 +464,7 @@ def list_tags(filenames, symlink=False):
     """
     return list_action(
         filenames,
-        get_tags,
+        'get_tags',
         format_file_tags,
         symlink=symlink)
 
@@ -561,17 +496,18 @@ def parse_filenames(filenames, pathfilter=None):
     return validnames
 
 
-def parse_tagstr(tagstr):
-    """ Return a tuple of tag names from a comma-separated string. """
-    rawnames = (s.strip() for s in tagstr.split(','))
-    return tuple(s for s in rawnames if s)
-
-
 def print_err(msg=None, ex=None):
     """ Print an error message.
         If an Exception is passed in for `ex`, it's message is also printed.
     """
     if msg:
+        if isinstance(msg, Exception):
+            # Shortcut use, like print_err(ex=msg).
+            msglines = str(msg).splitlines()
+            if len(msglines) > 1:
+                msg = '\n'.join(msglines[:-1])
+                ex = msglines[-1]
+
         errmsg = msg if NOERRCOLOR else C(msg, fore='red')
         sys.stderr.write('{}\n'.format(errmsg))
     if ex is not None:
@@ -590,40 +526,18 @@ def remove_comment(filenames, symlink=False):
     """
     errs = 0
     for filename in filenames:
+        editor = Editor(filename, symlink=symlink)
         try:
-            xattr.removexattr(filename, 'user.xdg.comment', symlink=symlink)
-        except EnvironmentError as ex:
+            editor.clear_comment()
+        except Editor.AttrError as ex:
             if ex.errno != ENOCOMMENT:
-                print_err(
-                    'Unable to remove comment from: {}'.format(filename),
-                    ex)
+                print_err(ex)
                 errs += 1
                 continue
             # Comment was not available.
-        status(format_file_name(filename, label='Cleared comment for'))
+        status(format_file_name(editor.filepath, label='Cleared comment for'))
 
     return errs
-
-
-def remove_file_tag(filename, taglist, symlink=False):
-    """ Remove a list of tags from a file name.
-        Returns the final tag list on success, or None on error.
-    """
-    filetags = get_tags(filename, symlink=symlink)
-    if filetags is None:
-        return None
-    if not filetags:
-        debug('No tags to remove for: {}'.format(filename))
-        return []
-    for tagname in taglist:
-        try:
-            filetags.remove(tagname)
-        except ValueError:
-            debug('{}: Tag did not exist: {}'.format(filename, tagname))
-    if not set_tags(filename, filetags):
-        return None
-
-    return filetags
 
 
 def remove_tag(filenames, tagstr, symlink=False):
@@ -631,14 +545,18 @@ def remove_tag(filenames, tagstr, symlink=False):
         Returns the number of errors.
     """
     errs = 0
-    taglist = parse_tagstr(tagstr)
-    if not taglist:
-        print_err('No tags to remove!: {}'.format(tagstr))
+    try:
+        taglist = Editor.parse_tagstr(tagstr)
+    except ValueError as ex:
+        print_err(ex)
         return 1
 
     for filename in filenames:
-        finaltags = remove_file_tag(filename, taglist, symlink=symlink)
-        if finaltags is None:
+        editor = Editor(filename, symlink=symlink)
+        try:
+            finaltags = editor.remove_tags(taglist)
+        except Editor.AttrError as ex:
+            print_err(ex)
             errs += 1
             continue
         status(format_file_tags(filename, finaltags, label='Set tags for'))
@@ -678,24 +596,21 @@ def search_comments(
     errs = 0
     if reverse:
         debug('Using reverse match.')
-        is_match = lambda rematch: rematch is None
-    else:
-        is_match = lambda rematch: rematch is not None
 
     for filename in filenames:
-        comment = get_comment(filename, symlink=symlink)
-        if comment is None:
+        editor = Editor(filename, symlink=symlink)
+        try:
+            comment = editor.match_comment(repat, reverse=reverse)
+        except Editor.AttrError as ex:
+            print_err(ex)
             errs += 1
             continue
 
-        # Empty comments are still valuable for patterns like: ^$
-        # ..and reverse/normal patterns like: ^.+$
-        rematch = repat.search(comment)
-        if is_match(rematch):
+        if comment is not None:
             if names_only:
-                status(format_file_name(filename))
+                status(format_file_name(editor.filepath))
             else:
-                status(format_file_comment(filename, comment))
+                status(format_file_comment(editor.filepath, comment))
             found += 1
 
     if not names_only:
@@ -716,17 +631,20 @@ def search_tags(
     errs = 0
 
     for filename in filenames:
-        tags = get_tags(filename, symlink=symlink)
-        if tags is None:
+        editor = Editor(filename, symlink=symlink)
+        try:
+            tags = editor.match_tags(repat, reverse=reverse)
+        except Editor.AttrError as ex:
+            print_err(ex)
             errs += 1
             continue
 
-        if tag_match(repat, tags, reverse=reverse):
+        if tags is not None:
             found += 1
             if names_only:
-                status(format_file_name(filename))
+                status(format_file_name(editor.filepath))
             else:
-                status(format_file_tags(filename, tags))
+                status(format_file_tags(editor.filepath, tags))
 
     if not names_only:
         status('\n{}'.format(format_file_cnt('tag', found)))
@@ -739,43 +657,19 @@ def set_comment(filenames, comment, symlink=False):
     """
     errs = 0
     for filename in filenames:
-        newcomment = set_file_comment(filename, comment, symlink=symlink)
-        if newcomment is None:
+        editor = Editor(filename, symlink=symlink)
+        try:
+            newcomment = editor.set_comment(comment)
+        except Editor.AttrError as ex:
             errs += 1
-            continue
-        status(format_file_comment(filename, comment, label='Set comment for'))
+            print_err(ex)
+        else:
+            status(
+                format_file_comment(
+                    editor.filepath,
+                    newcomment,
+                    label='Set comment for'))
     return errs
-
-
-def set_file_comment(filename, comment, symlink=False):
-    """ Set the comment attribute for a file.
-        Returns the new comment on success, or None on error.
-    """
-    try:
-        xattr.setxattr(
-            filename,
-            'user.xdg.comment',
-            comment.encode(),
-            symlink=symlink)
-    except EnvironmentError as ex:
-        print_err('Unable to set comment for: {}'.format(filename), ex)
-        return None
-    return comment
-
-
-def set_tags(filename, taglist, symlink=False):
-    """ Set a list of tags for a file name.
-        Returns True for success, or False on error.
-    """
-
-    tagstr = ','.join(taglist).encode()
-    try:
-        xattr.setxattr(filename, 'user.xdg.tags', tagstr, symlink=symlink)
-    except EnvironmentError as ex:
-        print_err('Error setting tags for: {}'.format(filename), ex)
-        return False
-
-    return True
 
 
 def status(msg, **kwargs):
@@ -785,19 +679,6 @@ def status(msg, **kwargs):
     if QUIET:
         return None
     return print(msg, **kwargs)
-
-
-def tag_match(repat, taglist, reverse=False):
-    """ Return true if a regex pattern matches any of the tags in the taglist.
-        If reverse is used, return True when none of the tags match.
-    """
-    if reverse:
-        if not taglist:
-            return repat.search('') is None
-        return all((repat.search(s) is None) for s in taglist)
-    if not taglist:
-        return repat.search('') is not None
-    return any((repat.search(s) is not None) for s in taglist)
 
 
 def try_repat(s):
@@ -836,6 +717,326 @@ class PathFilter(Enum):
         if argd['--files']:
             return cls.files
         return cls.none
+
+
+class Editor(object):
+    """ Holds information and helper methods for a single file and it's
+        tags/comments.
+        __init__ possibly raises FileNotFoundError or ValueError (for no path).
+    """
+    # Attributes to use for retrieving tags/comments.
+    attr_tags = 'user.xdg.tags'
+    attr_comment = 'user.xdg.comment'
+    # OSError number for no data available (tags/comment not available)
+    errno_nodata = 61
+    # Overridable separation character for tags when setting tags attr.
+    tag_sep = ','
+
+    class AttrError(EnvironmentError):
+        """ Wrapper for EnvironmentError that is raised when getting/setting
+            attributes fails.
+        """
+        pass
+
+    def __init__(self, path, symlink=False):
+        self.follow_symlinks = symlink
+        self.tags = []
+        self.comment = ''
+        try:
+            self.path = self._get_path(path)
+            self.filepath = str(self.path)
+        except (FileNotFoundError, ValueError):
+            raise
+        else:
+            self.tags = self.get_tags()
+            self.comment = self.get_comment()
+
+    def _get_path(self, path):
+        """ Resolve and return `path` if given, otherwise return `self.path`.
+            If neither are set, a ValueError is raised.
+            Also possibly raises FileNotFoundError when resolving `path`.
+        """
+        if path:
+            if isinstance(path, Path):
+                self.path = path.resolve()
+            elif isinstance(path, str):
+                self.path = Path(path).resolve()
+        if self.path:
+            return self.path
+        raise ValueError('No path set for this EditFile instance.')
+
+    def add_tag(self, tag):
+        """ Add a single tag to the tags for this file.
+            Duplicate tags will not be added.
+            Returns the new tags as a list.
+            Raises ValueError if `tag` is falsey.
+            Possibly raises AttrError.
+        """
+        if not tag:
+            raise ValueError('Empty tags may not be added: {!r}'.format(tag))
+        if tag in self.tags:
+            return self.tags
+        self.tags.append(tag)
+        return self.set_tags(self.tags)
+
+    def add_tags(self, taglist):
+        """ Add multiple tags to this file.
+            Duplicate tags will not be added.
+            Returns the new tags as a list.
+            Raises ValueError if taglist is empty.
+            Possibly raises AttrError.
+        """
+        if not taglist:
+            raise ValueError(
+                'Empty tag list may not be added: {!r}'.format(taglist))
+        self.tags.extend(taglist)
+        return self.set_tags(self.tags)
+
+    def clear_comment(self):
+        """ Remove the entire comment attribute/value from this file.
+            Returns True on success.
+            Possibly raises AttrError.
+        """
+        return self.remove_attr(self.attr_comment)
+
+    def clear_tags(self):
+        """ Remove the entire tags attribute/value from this file.
+            Returns True on success.
+            Possibly raises AttrError.
+        """
+        return self.remove_attr(self.attr_tags)
+
+    def get_attr(self, attrname):
+        """ Retrieve a raw attribute value by name. """
+        try:
+            tagval = xattr.getxattr(
+                self.filepath,
+                attrname,
+                symlink=self.follow_symlinks)
+        except EnvironmentError as ex:
+            if ex.errno == self.errno_nodata:
+                # No data available.
+                return None
+            # Unexpected error.
+            raise self.AttrError(
+                'Unable to retrieve \'{}\' for: {}\n{}'.format(
+                    attrname,
+                    self.filepath,
+                    ex))
+
+        return tagval.decode()
+
+    def get_attrs(self):
+        """ Return a dict of {attr: value} for all extended attributes for
+            this file.
+            Possibly raises AttrError.
+        """
+        try:
+            attrs = xattr.listxattr(
+                self.filepath,
+                symlink=self.follow_symlinks)
+        except EnvironmentError as ex:
+            raise self.AttrError(
+                'Unable to list attributes for file: {}'.format(self.filepath),
+                ex)
+        return {aname: self.get_attr(aname) for aname in attrs}
+
+    def get_comment(self, refresh=False):
+        """ Return the comment for this file.
+            If self.comment is already set, return it.
+            If `refresh` is truthy, or self.comment is not set, retrieve it.
+        """
+        if self.comment and (not refresh):
+            # Comment was already retrieved, and we're not refreshing the data.
+            return self.comment
+        comment = self.get_attr(self.attr_comment)
+        if not comment:
+            return ''
+        return comment.strip()
+
+    def get_tags(self, refresh=False):
+        """ Return sorted tags for this file.
+            If self.tags is already set, return it.
+            If `refresh` is truthy, or self.tags is not set, retrieve it.
+        """
+        if self.tags and (not refresh):
+            # Tags were already retrieved, and we are not refreshing the tags.
+            return self.tags
+
+        tagstr = self.get_attr(self.attr_tags)
+        return self.parse_tagstr(tagstr)
+
+    def match_comment(self, repat, reverse=False, ignorecase=False):
+        """ Return the comment if the regex pattern (`repat`) matches the
+            comment.
+            If `reverse` is used, returns the comment if the pattern does not
+            match.
+            Returns None on non-matches.
+        """
+        self.comment = self.get_comment()
+        reflags = re.IGNORECASE if ignorecase else 0
+        if reverse:
+            matched = re.search(repat, self.comment, reflags) is None
+        else:
+            matched = re.search(repat, self.comment, reflags) is not None
+        if matched:
+            return self.comment
+        return None
+
+    def match_tags(self, repat, reverse=False, ignorecase=False):
+        """ Return the tag list if the regex pattern (`repat`) matches any
+            tags.
+            If `reverse` is used, returns the tag list if none of the tags
+            match.
+            Returns None on non-matches.
+        """
+        self.tags = self.get_tags()
+        reflags = re.IGNORECASE if ignorecase else 0
+        if reverse:
+            ismatch = lambda s: re.search(repat, s, reflags) is None
+            # All tags must not match.
+            boolfilter = all
+        else:
+            ismatch = lambda s: re.search(repat, s, reflags) is not None
+            # Any tag may match.
+            boolfilter = any
+        if not self.tags:
+            # Empty tags. Patterns will test against an empty string.
+            return [] if ismatch('') else None
+
+        if boolfilter(ismatch(s) for s in self.tags):
+            return self.tags
+
+        return None
+
+    @classmethod
+    def parse_taglist(cls, taglist):
+        """ Parse a tag list into a attribute-friendly string.
+            Sorts and removes duplicates.
+        """
+        return cls.tag_sep.join(sorted(set(taglist)))
+
+    @classmethod
+    def parse_tagstr(cls, tagstr):
+        """ Parse a tag str into a sorted list.
+            `tagstr` should be str or bytes.
+        """
+        if hasattr(tagstr, 'decode'):
+            tagstr = tagstr.decode()
+        if not tagstr:
+            # Empty tag string.
+            return []
+        # It is possible that empty tags were set 'tag1,,tag2'...
+        rawtags = (s.strip() for s in tagstr.split(cls.tag_sep))
+        # Remove any empty tags.
+        return sorted(s for s in rawtags if s)
+
+    def remove_attr(self, attrname):
+        """ Remove a raw attribute and value from this file.
+            Returns True on success.
+            Possibly raises AttrError.
+        """
+        try:
+            xattr.removexattr(
+                self.filepath,
+                attrname,
+                symlink=self.follow_symlinks)
+        except EnvironmentError as ex:
+            if ex.errno == self.errno_nodata:
+                # Already removed.
+                return True
+            raise self.AttrError(
+                'Unable to remove attribute \'{}\' for: {}\n{}'.format(
+                    attrname,
+                    self.filepath,
+                    ex))
+        return True
+
+    def remove_comment(self):
+        """ Remove the comment for this file.
+            Returns True on success.
+            Possibly raises AttrError.
+            This is an alias for clear_comment().
+        """
+        return self.clear_comment()
+
+    def remove_tag(self, tag):
+        """ Remove a single tag from this file.
+            Returns any tags that are left as a list.
+            Does not care if the tag isn't present.
+            Possibly raises AttrError.
+        """
+        try:
+            self.tags.remove(tag)
+        except ValueError:
+            pass
+        newtagstr = self.set_tags(self.tags)
+        return self.parse_tagstr(newtagstr)
+
+    def remove_tags(self, taglist):
+        """ Remove multiple tags at once from this file.
+            Returns any tags that are left as a list.
+            Does not care if one of the tags isn't present.
+            Possibly raises AttrError.
+        """
+        for t in taglist:
+            try:
+                self.tags.remove(t)
+            except ValueError:
+                pass
+        newtagstr = self.set_tags(self.tags)
+        return self.parse_tagstr(newtagstr)
+
+    def set_attr(self, attrname, value):
+        """ Set the value for a raw attribute.
+            Value should be a string or bytes.
+            Returns the value on success.
+            Possibly raises AttrError.
+        """
+        if isinstance(value, bytes):
+            encodedvalue = value
+        elif isinstance(value, str):
+            encodedvalue = value.encode()
+        else:
+            valtype = type(value)
+            raise TypeError(
+                'Expecting str or bytes. Got: {} ({})'.format(
+                    getattr(valtype, '__name__', valtype),
+                    value))
+        try:
+            xattr.setxattr(
+                self.filepath,
+                attrname,
+                encodedvalue,
+                symlink=self.follow_symlinks)
+        except EnvironmentError as ex:
+            raise self.AttrError(
+                'Unable to set \'{}\' for: {}\n{}'.format(
+                    attrname,
+                    self.filepath,
+                    ex))
+
+        return value
+
+    def set_comment(self, text):
+        """ Set the comment for this file.
+            Returns the comment on success.
+            Possibly raises AttrError.
+        """
+        self.comment = self.set_attr(self.attr_comment, text)
+        return self.comment
+
+    def set_tags(self, taglist):
+        """ Set the tags for this file.
+            `taglist` should be an iterable of strings (tags).
+            Removes any duplicate tags before setting.
+            Returns the tags on success.
+            Possibly raises AttrError.
+        """
+        tagstr = self.parse_taglist(taglist)
+        newvalue = self.set_attr(self.attr_tags, tagstr)
+        self.tags = self.parse_tagstr(newvalue)
+        return self.tags
 
 
 if __name__ == '__main__':
