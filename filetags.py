@@ -14,7 +14,7 @@
 
     -Christopher Welborn 09-27-2015
 """
-
+import errno
 import inspect
 import os
 import re
@@ -91,8 +91,6 @@ USAGESTR = """{versionstr}
 DEBUG = False
 # Global silence flag, set with --quiet to avoid non-error messages.
 QUIET = False
-# OSError number for no data available (tag not available)
-ENOCOMMENT = ENOTAGS = 61
 
 # Disable colors when piping output.
 NOCOLOR = not sys.stdout.isatty()
@@ -205,10 +203,9 @@ def clear_xattr(filenames, attrname=None, symlink=False):
         try:
             editor.remove_attr(attrname)
         except Editor.AttrError as ex:
-            if ex.errno != ENOTAGS:
-                print_err(ex)
-                errs += 1
-                continue
+            print_err(ex)
+            errs += 1
+            continue
 
         # Tags were removed, or did not exist.
         status(format_file_name(
@@ -530,10 +527,9 @@ def remove_comment(filenames, symlink=False):
         try:
             editor.clear_comment()
         except Editor.AttrError as ex:
-            if ex.errno != ENOCOMMENT:
-                print_err(ex)
-                errs += 1
-                continue
+            print_err(ex)
+            errs += 1
+            continue
             # Comment was not available.
         status(format_file_name(editor.filepath, label='Cleared comment for'))
 
@@ -723,22 +719,42 @@ class Editor(object):
     """ Holds information and helper methods for a single file and it's
         tags/comments.
         __init__ possibly raises FileNotFoundError or ValueError (for no path).
+
+        Tags are comma-separated by default, and encoded using the system's
+        default encoding. This can be subclassed to handle different formats by
+        overriding the class methods parse_tagstr() and parse_taglist().
+        The encoding can be changed by setting Editor.encoding.
+        If all that is needed is a different separator, then Editor.tag_sep
+        can be set.
+        Finally, the default attributes are 'user.xdg.tags' and
+        'user.xdg.comment', but they can also be changed by setting
+        Editor.attr_tags and Editor.attr_comment.
+
+        If you would like AttrError to be raised for missing attributes,
+        set Editor.errno_nodata to 0, or some other non-existent number in the
+        errno module.
     """
     # Attributes to use for retrieving tags/comments.
     attr_tags = 'user.xdg.tags'
     attr_comment = 'user.xdg.comment'
-    # OSError number for no data available (tags/comment not available)
-    errno_nodata = 61
-    # Overridable separation character for tags when setting tags attr.
+    # Encoding to use when setting attribute values.
+    encoding = sys.getdefaultencoding()
+    # OSError number for no data available (attribute not available)
+    errno_nodata = errno.ENODATA
+    # Overridable separation character for tags when setting/parsing tags.
     tag_sep = ','
 
     class AttrError(EnvironmentError):
-        """ Wrapper for EnvironmentError that is raised when getting/setting
-            attributes fails.
+        """ Wrapper for EnvironmentError that is raised when getting, setting,
+            or removing an attribute fails.
+            Missing attributes, or empty attributes will not cause this.
         """
         pass
 
     def __init__(self, path, symlink=False):
+        """ Resolves a file path and retrieves the tags and comment for it.
+            Possibly raises FileNotFoundError, or ValueError (for empty path).
+        """
         self.follow_symlinks = symlink
         self.tags = []
         self.comment = ''
@@ -836,6 +852,8 @@ class Editor(object):
                 self.filepath,
                 symlink=self.follow_symlinks)
         except EnvironmentError as ex:
+            if ex.errno == self.errno_nodata:
+                return {}
             raise self.AttrError(
                 'Unable to list attributes for file: {}'.format(self.filepath),
                 ex)
@@ -996,7 +1014,7 @@ class Editor(object):
         if isinstance(value, bytes):
             encodedvalue = value
         elif isinstance(value, str):
-            encodedvalue = value.encode()
+            encodedvalue = value.encode(self.encoding)
         else:
             valtype = type(value)
             raise TypeError(
