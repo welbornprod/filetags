@@ -49,6 +49,8 @@ USAGESTR = """{versionstr}
                                    When not given, all paths in the current
                                    directory are used. If -R is given instead
                                    of FILES, the current directory is walked.
+                                   If - is given as a file name, stdin is read
+                                   and each line will be used as a file name.
                                    Files and directories can be filtered
                                    with -F and -D.
         MSG                      : New comment message when setting comments.
@@ -109,7 +111,7 @@ def main(argd):
             recurse=argd['--recurse'],
             pathfilter=pathfilter)
 
-    symlink = argd['--symlinks']
+    Editor.follow_symlinks = argd['--symlinks']
 
     if argd['--search']:
         return search(
@@ -117,32 +119,31 @@ def main(argd):
             filenames=filenames,
             pattern=argd['--search'],
             names_only=argd['--names'],
-            reverse=argd['--reverse'],
-            symlink=symlink
+            reverse=argd['--reverse']
         )
 
     if argd['--add']:
-        return add_tag(filenames, argd['--add'], symlink=symlink)
+        return add_tag(filenames, argd['--add'])
     elif argd['--attrs']:
-        return list_attrs(filenames, symlink=symlink)
+        return list_attrs(filenames)
     elif argd['--clear']:
         if argd['--comment']:
-            return clear_comment(filenames, symlink=symlink)
-        return clear_tag(filenames, symlink=symlink)
+            return clear_comment(filenames)
+        return clear_tag(filenames)
     elif argd['--comment']:
-        return list_comments(filenames, symlink=symlink)
+        return list_comments(filenames)
     elif argd['--delete']:
-        return remove_tag(filenames, argd['--delete'], symlink=symlink)
+        return remove_tag(filenames, argd['--delete'])
     elif argd['--setcomment']:
-        return set_comment(filenames, argd['--setcomment'], symlink=symlink)
+        return set_comment(filenames, argd['--setcomment'])
     elif argd['--tags']:
-        return list_tags(filenames, symlink=symlink)
+        return list_tags(filenames)
 
     # Default behavior
-    return list_tags(filenames, symlink=symlink)
+    return list_tags(filenames)
 
 
-def add_tag(filenames, tagstr, symlink=False):
+def add_tag(filenames, tagstr):
     """ Add a tag or tags to file names.
         Return the number of errors.
     """
@@ -154,7 +155,7 @@ def add_tag(filenames, tagstr, symlink=False):
         return 1
 
     for filename in filenames:
-        editor = Editor(filename, symlink=symlink)
+        editor = Editor(filename)
         try:
             settags = editor.add_tags(tags)
         except Editor.AttrError as ex:
@@ -169,27 +170,25 @@ def add_tag(filenames, tagstr, symlink=False):
     return errs
 
 
-def clear_comment(filenames, symlink=False):
+def clear_comment(filenames):
     """ Clear all comments from file names.
         Return the number of errors.
     """
     return clear_xattr(
         filenames,
-        attrname=Editor.attr_comment,
-        symlink=symlink)
+        attrname=Editor.attr_comment)
 
 
-def clear_tag(filenames, symlink=False):
+def clear_tag(filenames):
     """ Clear all tags from file names.
         Return the number of errors.
     """
     return clear_xattr(
         filenames,
-        attrname=Editor.attr_tags,
-        symlink=symlink)
+        attrname=Editor.attr_tags)
 
 
-def clear_xattr(filenames, attrname=None, symlink=False):
+def clear_xattr(filenames, attrname=None):
     """ Clear an entire extended attribute setting from file names.
         Return the number of errors.
     """
@@ -199,7 +198,7 @@ def clear_xattr(filenames, attrname=None, symlink=False):
     attrtype = attrname.split('.')[-1]
     errs = 0
     for filename in filenames:
-        editor = Editor(filename, symlink=symlink)
+        editor = Editor(filename)
         try:
             editor.remove_attr(attrname)
         except Editor.AttrError as ex:
@@ -407,18 +406,17 @@ def get_filenames(recurse=False, pathfilter=None):
     status('\n{}'.format(format_file_cnt('file', cnt)))
 
 
-def list_attrs(filenames, symlink=False):
+def list_attrs(filenames):
     """ List raw attributes and values for file names.
         Returns the number of errors.
     """
     return list_action(
         filenames,
         'get_attrs',
-        format_file_attrs,
-        symlink=symlink)
+        format_file_attrs)
 
 
-def list_action(filenames, value_func_name, format_func, symlink=False):
+def list_action(filenames, value_func_name, format_func):
     """ Run an action for the 'list' commands.
         Arguments:
             filenames         : An iterable of valid file names.
@@ -432,7 +430,7 @@ def list_action(filenames, value_func_name, format_func, symlink=False):
     """
     errs = 0
     for filename in filenames:
-        editor = Editor(filename, symlink=symlink)
+        editor = Editor(filename)
         value_func = getattr(editor, value_func_name)
         try:
             values = value_func()
@@ -444,29 +442,27 @@ def list_action(filenames, value_func_name, format_func, symlink=False):
     return errs
 
 
-def list_comments(filenames, symlink=False):
+def list_comments(filenames):
     """ List comments for file names.
         Returns the number of errors.
     """
     return list_action(
         filenames,
         'get_comment',
-        format_file_comment,
-        symlink=symlink)
+        format_file_comment)
 
 
-def list_tags(filenames, symlink=False):
+def list_tags(filenames):
     """ List all file tags for file names.
         Returns the number of errors.
     """
     return list_action(
         filenames,
         'get_tags',
-        format_file_tags,
-        symlink=symlink)
+        format_file_tags)
 
 
-def parse_filenames(filenames, pathfilter=None):
+def parse_filenames(filenames, pathfilter=None, nostdin=False):
     """ Ensure all file names have an absolute path.
         Print any non-existent files.
         Returns a set of full paths.
@@ -480,6 +476,18 @@ def parse_filenames(filenames, pathfilter=None):
 
     validnames = set()
     for filename in filenames:
+        if filename == '-':
+            # Read stdin if not done already.
+            if nostdin:
+                continue
+            stdin_valid = parse_stdin_filenames()
+            if stdin_valid:
+                validnames.update(stdin_valid)
+                continue
+            # No names were in stdin.
+            print_err('\nNo valid file names to work with from stdin.')
+            sys.exit(1)
+
         fullpath = os.path.abspath(filename)
         if not os.path.exists(fullpath):
             print_err('File does not exist: {}'.format(fullpath))
@@ -491,6 +499,17 @@ def parse_filenames(filenames, pathfilter=None):
         len(validnames),
         pathfilter))
     return validnames
+
+
+def parse_stdin_filenames():
+    """ Read file names from stdin. One file name per line. """
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        print('\nReading from stdin until end of file (Ctrl + D)...\n')
+
+    return parse_filenames(
+        set(s.strip() for s in sys.stdin.readlines()),
+        nostdin=True
+    )
 
 
 def print_err(msg=None, ex=None):
@@ -517,13 +536,13 @@ def print_err(msg=None, ex=None):
     return None
 
 
-def remove_comment(filenames, symlink=False):
+def remove_comment(filenames):
     """ Remove the comment from file names.
         Returns the number of errors.
     """
     errs = 0
     for filename in filenames:
-        editor = Editor(filename, symlink=symlink)
+        editor = Editor(filename)
         try:
             editor.clear_comment()
         except Editor.AttrError as ex:
@@ -536,7 +555,7 @@ def remove_comment(filenames, symlink=False):
     return errs
 
 
-def remove_tag(filenames, tagstr, symlink=False):
+def remove_tag(filenames, tagstr):
     """ Remove a tag or tags from file names.
         Returns the number of errors.
     """
@@ -548,7 +567,7 @@ def remove_tag(filenames, tagstr, symlink=False):
         return 1
 
     for filename in filenames:
-        editor = Editor(filename, symlink=symlink)
+        editor = Editor(filename)
         try:
             finaltags = editor.remove_tags(taglist)
         except Editor.AttrError as ex:
@@ -562,7 +581,7 @@ def remove_tag(filenames, tagstr, symlink=False):
 
 def search(
         comments=False, filenames=None, pattern=None,
-        names_only=False, reverse=False, symlink=False):
+        names_only=False, reverse=False):
     """ Run one of the search functions on comments/tags.
         If no file names are given, the current directory is used.
         If recurse is True, the current directory is walked.
@@ -573,8 +592,7 @@ def search(
 
     searchargs = {
         'names_only': names_only,
-        'reverse': reverse,
-        'symlink': symlink
+        'reverse': reverse
     }
     debug('search args: {!r}'.format(searchargs))
     if comments:
@@ -583,7 +601,7 @@ def search(
 
 
 def search_comments(
-        filenames, repat, names_only=False, reverse=False, symlink=False):
+        filenames, repat, names_only=False, reverse=False):
     """ Search comments for a pattern.
         Returns the number of errors.
     """
@@ -594,7 +612,7 @@ def search_comments(
         debug('Using reverse match.')
 
     for filename in filenames:
-        editor = Editor(filename, symlink=symlink)
+        editor = Editor(filename)
         try:
             comment = editor.match_comment(repat, reverse=reverse)
         except Editor.AttrError as ex:
@@ -615,7 +633,7 @@ def search_comments(
 
 
 def search_tags(
-        filenames, repat, names_only=False, reverse=False, symlink=False):
+        filenames, repat, names_only=False, reverse=False):
     """ Search comments for a pattern.
         If no file names are given, the current directory is used.
         If recurse is True, the current directory is walked.
@@ -627,7 +645,7 @@ def search_tags(
     errs = 0
 
     for filename in filenames:
-        editor = Editor(filename, symlink=symlink)
+        editor = Editor(filename)
         try:
             tags = editor.match_tags(repat, reverse=reverse)
         except Editor.AttrError as ex:
@@ -647,13 +665,13 @@ def search_tags(
     return errs
 
 
-def set_comment(filenames, comment, symlink=False):
+def set_comment(filenames, comment):
     """ Set the comment for file names.
         Returns the number of errors.
     """
     errs = 0
     for filename in filenames:
-        editor = Editor(filename, symlink=symlink)
+        editor = Editor(filename)
         try:
             newcomment = editor.set_comment(comment)
         except Editor.AttrError as ex:
@@ -726,13 +744,22 @@ class Editor(object):
         The encoding can be changed by setting Editor.encoding.
         If all that is needed is a different separator, then Editor.tag_sep
         can be set.
-        Finally, the default attributes are 'user.xdg.tags' and
+        The default attributes are 'user.xdg.tags' and
         'user.xdg.comment', but they can also be changed by setting
         Editor.attr_tags and Editor.attr_comment.
+        Finally, if you would like xattr to follow symlinks then set
+        Editor.follow_symlinks to True.
 
         If you would like AttrError to be raised for missing attributes,
         set Editor.errno_nodata to 0, or some other non-existent number in the
         errno module.
+
+        Instance Attributes:
+            follow_symlinks  : Passed to xattr, whether to follow symlinks.
+            path             : Resolved pathlib.Path().
+            filepath         : File path string (str(self.path)).
+            tags             : List of tags, or [].
+            comment          : String containing the comment, or ''.
     """
     # Attributes to use for retrieving tags/comments.
     attr_tags = 'user.xdg.tags'
@@ -743,6 +770,8 @@ class Editor(object):
     errno_nodata = errno.ENODATA
     # Overridable separation character for tags when setting/parsing tags.
     tag_sep = ','
+    # Whether xattr should follow symlinks.
+    follow_symlinks = False
 
     class AttrError(EnvironmentError):
         """ Wrapper for EnvironmentError that is raised when getting, setting,
@@ -751,19 +780,19 @@ class Editor(object):
         """
         pass
 
-    def __init__(self, path, symlink=False):
+    def __init__(self, path):
         """ Resolves a file path and retrieves the tags and comment for it.
             Possibly raises FileNotFoundError, or ValueError (for empty path).
         """
-        self.follow_symlinks = symlink
         self.tags = []
         self.comment = ''
         try:
             self.path = self._get_path(path)
-            self.filepath = str(self.path)
         except (FileNotFoundError, ValueError):
             raise
         else:
+            # Only possible with a valid (resolved) path.
+            self.filepath = str(self.path)
             self.tags = self.get_tags()
             self.comment = self.get_comment()
 
@@ -1065,5 +1094,12 @@ if __name__ == '__main__':
         # Override automatic detection.
         NOCOLOR = NOERRCOLOR = True
 
-    MAINRET = main(ARGD)
+    try:
+        MAINRET = main(ARGD)
+    except KeyboardInterrupt:
+        print_err('User cancelled.')
+        MAINRET = 2
+    except BrokenPipeError:
+        print_err('Broken pipe, operation may have been interrupted.')
+        MAINRET = 3
     sys.exit(MAINRET)
