@@ -1,3 +1,3 @@
-xattr >= 0.7.8
-colr >= 0.0.5
+colr >= 0.5.1
 docopt >= 0.6.2
+xattr >= 0.8.0

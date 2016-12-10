@@ -14,6 +14,9 @@
 
     -Christopher Welborn 09-27-2015
 """
+# TODO:?  Add comments and tags at the same time:
+# TODO:.. filetags -a "mytag" -m "my message" FILES...
+
 import errno
 import inspect
 import os
@@ -24,11 +27,17 @@ from enum import Enum
 from pathlib import Path
 
 import xattr
-from colr import Colr as C
-from docopt import docopt
+from colr import (
+    auto_disable as colr_auto_disable,
+    disable as colr_disable,
+    docopt,
+    Colr as C,
+)
+
+colr_auto_disable()
 
 NAME = 'File Tags'
-VERSION = '0.2.0'
+VERSION = '0.2.2'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))[1]
 SCRIPTDIR = os.path.abspath(sys.path[0])
@@ -36,13 +45,20 @@ SCRIPTDIR = os.path.abspath(sys.path[0])
 USAGESTR = """{versionstr}
     Usage:
         {script} -h | -v
-        {script} [-A | -c | -t] (FILE... | [-R]) [-l] [-D | -F] [-I | -q] [-N]
-        {script} -a tag (FILE... | [-R])         [-l] [-D | -F] [-I | -q] [-N]
-        {script} -d tag (FILE... | [-R])         [-l] [-D | -F] [-I | -q] [-N]
-        {script} -m comment (FILE... | [-R])     [-l] [-D | -F] [-I | -q] [-N]
-        {script} -C [-c] (FILE... | [-R])        [-l] [-D | -F] [-I | -q] [-N]
-        {script} -s pat [-c] [-n] [-r] [-R]      [-l] [-D | -F] [-I | -q] [-N]
-        {script} -s pat [-c]  FILE... [-n] [-r]  [-l] [-D | -F] [-I | -q] [-N]
+        {script} [-A | -c | -t] (FILE... | [-R]) [-i]
+                 [-l] [-D | -F] [-I | -q] [-N]
+        {script} -a tag (FILE... | [-R])
+                 [-l] [-D | -F] [-I | -q] [-N]
+        {script} -d tag (FILE... | [-R])
+                 [-l] [-D | -F] [-I | -q] [-N]
+        {script} -m comment (FILE... | [-R])
+                 [-l] [-D | -F] [-I | -q] [-N]
+        {script} -C [-c] (FILE... | [-R])
+                 [-l] [-D | -F] [-I | -q] [-N]
+        {script} -s pat [-c] [-n] [-r] [-R]
+                 [-l] [-D | -F] [-I | -q] [-N]
+        {script} -s pat [-c]  FILE... [-n] [-r]
+                 [-l] [-D | -F] [-I | -q] [-N]
 
     Options:
         FILE                     : One or more file names.
@@ -60,12 +76,15 @@ USAGESTR = """{versionstr}
         -c,--comment             : List file comments,
                                    search comments when -s is used,
                                    clear comments when -C is used.
-        -C,--clear               : Clear all tags, or comments when -c is used.
+        -C,--clear               : Clear all tags when -t is used,
+                                   or comments when -c is used.
         -d tag,--delete tag      : Remove an existing tag.
                                    Several comma-separated tags can be used.
-        -D,--dirs                : Filter all file paths, use directories only.
-        -F,--files               : Filter all file paths, use files only.
+        -D,--dirs                : Use directories only.
+        -F,--files               : Use files only.
         -h,--help                : Show this help message.
+        -i,--noblanks            : Omit files that are missing attrs, tags,
+                                   or comments when -A, -c, or -t is used.
         -I,--debug               : Print debugging info.
         -l,--symlinks            : Follow symlinks.
         -m msg,--setcomment msg  : Set the comment for a file.
@@ -94,10 +113,6 @@ DEBUG = False
 # Global silence flag, set with --quiet to avoid non-error messages.
 QUIET = False
 
-# Disable colors when piping output.
-NOCOLOR = not sys.stdout.isatty()
-NOERRCOLOR = not sys.stderr.isatty()
-
 
 def main(argd):
     """ Main entry point, expects doctopt arg dict as argd. """
@@ -106,10 +121,16 @@ def main(argd):
         argd['FILE'],
         pathfilter=pathfilter
     )
-    if not filenames:
+    if filenames:
+        print(format_file_cnt('path', len(filenames), label='Using'))
+    elif filenames is None:
         filenames = get_filenames(
             recurse=argd['--recurse'],
             pathfilter=pathfilter)
+    else:
+        # User passed arguments, and none were valid.
+        print_err('No paths to work with!')
+        return 1
 
     Editor.follow_symlinks = argd['--symlinks']
 
@@ -125,22 +146,22 @@ def main(argd):
     if argd['--add']:
         return add_tag(filenames, argd['--add'])
     elif argd['--attrs']:
-        return list_attrs(filenames)
+        return list_attrs(filenames, ignore_empty=argd['--noblanks'])
     elif argd['--clear']:
         if argd['--comment']:
             return clear_comment(filenames)
         return clear_tag(filenames)
     elif argd['--comment']:
-        return list_comments(filenames)
+        return list_comments(filenames, ignore_empty=argd['--noblanks'])
     elif argd['--delete']:
         return remove_tag(filenames, argd['--delete'])
     elif argd['--setcomment']:
         return set_comment(filenames, argd['--setcomment'])
     elif argd['--tags']:
-        return list_tags(filenames)
+        return list_tags(filenames, ignore_empty=argd['--noblanks'])
 
     # Default behavior
-    return list_tags(filenames)
+    return list_tags(filenames, ignore_empty=argd['--noblanks'])
 
 
 def add_tag(filenames, tagstr):
@@ -242,11 +263,11 @@ def debug(*args, **kwargs):
 
     # Patch args to stay compatible with print().
     pargs = list(args)
-    if not NOCOLOR:
-        # Colorize the line info.
-        fname = C(fname, fore='yellow')
-        lineno = C(str(lineno), fore='blue', style='bright')
-        func = C(func, fore='magenta')
+
+    # Colorize the line info.
+    fname = C(fname, fore='yellow')
+    lineno = C(str(lineno), fore='blue', style='bright')
+    func = C(func, fore='magenta')
 
     lineinfo = '{}:{} {}(): '.format(fname, lineno, func).ljust(40)
     # Join and colorize the message.
@@ -255,21 +276,16 @@ def debug(*args, **kwargs):
         kwargs.pop('sep')
     else:
         sep = ' '
-    if NOCOLOR:
-        msg = ' '.join((lineinfo, sep.join(pargs)))
-    else:
-        msg = ' '.join((
-            lineinfo,
-            str(C(sep.join(pargs), fore='green'))
-        ))
+
+    msg = ' '.join((
+        lineinfo,
+        str(C(sep.join(pargs), fore='green'))
+    ))
     # Format an exception.
     ex = kwargs.get('ex', None)
     if ex is not None:
         kwargs.pop('ex')
-        if NOCOLOR:
-            exmsg = str(ex)
-        else:
-            exmsg = str(C(str(ex), fore='red'))
+        exmsg = str(C(str(ex), fore='red'))
         msg = '\n  '.join((msg, exmsg))
     return status(msg, **kwargs)
 
@@ -279,19 +295,12 @@ def format_file_attrs(filename, attrvals):
         as str.
     """
     valfmt = '{:>35}: {}'.format
-    if NOCOLOR:
-        vals = '\n   '.join(
-            valfmt(k, v) for k, v in attrvals.items()
-        )
-        if not vals:
-            vals = '(none)'
-    else:
-        vals = '\n    '.join(
-            valfmt(C(aname, fore='green'), C(aval, fore='cyan'))
-            for aname, aval in attrvals.items()
-        )
-        if not vals:
-            vals = C('none', fore='red').join('(', ')', style='bright')
+    vals = '\n    '.join(
+        valfmt(C(aname, fore='green'), C(aval, fore='cyan'))
+        for aname, aval in attrvals.items()
+    )
+    if not vals:
+        vals = C('none', fore='red').join('(', ')', style='bright')
     return '{}:\n    {}'.format(
         format_file_name(filename),
         vals)
@@ -300,12 +309,9 @@ def format_file_attrs(filename, attrvals):
 def format_file_comment(filename, comment, label=None):
     """ Return a formatted file name and comment. """
     if not comment:
-        if NOCOLOR:
-            comment = '(empty)'
-        else:
-            comment = str(
-                C('empty', fore='red').join('(', ')', style='bright')
-            )
+        comment = str(
+            C('empty', fore='red').join('(', ')', style='bright')
+        )
     return '{}:\n    {}'.format(
         format_file_name(filename, label=label),
         '\n    '.join(l for l in comment.splitlines())
@@ -314,9 +320,6 @@ def format_file_comment(filename, comment, label=None):
 
 def format_file_name(filename, label=None):
     """ Return a formatted file name string. """
-    if NOCOLOR:
-        return filename
-
     style = 'bright' if os.path.isdir(filename) else 'normal'
     return ''.join((
         '{} '.format(label) if label else '',
@@ -333,16 +336,14 @@ def format_file_tags(filename, taglist, label=None):
     )
 
 
-def format_file_cnt(filetype, total):
+def format_file_cnt(filetype, total, label='Found'):
     """ Return a formatted search result string. """
     if total != 1:
         filetype = '{}s'.format(filetype)
-    if NOCOLOR:
-        return 'Found {} {}.'.format(total, filetype)
 
     return '{}.'.format(
         C(' ').join(
-            C('Found', fore='cyan'),
+            C(label or 'Found', fore='cyan'),
             C(str(total), fore='blue', style='bright'),
             C(filetype, fore='cyan')
         )
@@ -351,14 +352,9 @@ def format_file_cnt(filetype, total):
 
 def format_tags(taglist):
     """ Format a list of tags into an indented string. """
-    if NOCOLOR:
-        tags = '\n    '.join(taglist)
-        if not tags:
-            return '(none)'
-    else:
-        tags = '\n    '.join(str(C(s, fore='cyan')) for s in taglist)
-        if not tags:
-            return C('none', fore='red').join('(', ')', style='bright')
+    tags = '\n    '.join(str(C(s, fore='cyan')) for s in taglist)
+    if not tags:
+        return C('none', fore='red').join('(', ')', style='bright')
     return tags
 
 
@@ -406,25 +402,15 @@ def get_filenames(recurse=False, pathfilter=None):
     status('\n{}'.format(format_file_cnt('file', cnt)))
 
 
-def list_attrs(filenames):
-    """ List raw attributes and values for file names.
-        Returns the number of errors.
-    """
-    return list_action(
-        filenames,
-        'get_attrs',
-        format_file_attrs)
-
-
-def list_action(filenames, value_func_name, format_func):
+def list_action(filenames, value_func_name, format_func, ignore_empty=False):
     """ Run an action for the 'list' commands.
         Arguments:
             filenames         : An iterable of valid file names.
             values_func_name  : Name of Editor method to get values.
             format_func       : A function to format a filename and values.
-                                See: format_file_attrs() and format_file_tags()
-            symlink           : Whether to follow symlinks, a kwarg for
-                                value_func.
+                                See:
+                                    format_file_attrs() and format_file_tags()
+            ignore_empty      : Whether to omit file names with no tags set.
 
         Returns the number of errors.
     """
@@ -438,28 +424,43 @@ def list_action(filenames, value_func_name, format_func):
             print_err(ex)
             errs += 1
             continue
+        if ignore_empty and (not values):
+            continue
         status(format_func(editor.filepath, values))
     return errs
 
 
-def list_comments(filenames):
+def list_attrs(filenames, ignore_empty=False):
+    """ List raw attributes and values for file names.
+        Returns the number of errors.
+    """
+    return list_action(
+        filenames,
+        'get_attrs',
+        format_file_attrs,
+        ignore_empty=ignore_empty)
+
+
+def list_comments(filenames, ignore_empty=False):
     """ List comments for file names.
         Returns the number of errors.
     """
     return list_action(
         filenames,
         'get_comment',
-        format_file_comment)
+        format_file_comment,
+        ignore_empty=ignore_empty)
 
 
-def list_tags(filenames):
+def list_tags(filenames, ignore_empty=False):
     """ List all file tags for file names.
         Returns the number of errors.
     """
     return list_action(
         filenames,
         'get_tags',
-        format_file_tags)
+        format_file_tags,
+        ignore_empty=ignore_empty)
 
 
 def parse_filenames(filenames, pathfilter=None, nostdin=False):
@@ -467,6 +468,10 @@ def parse_filenames(filenames, pathfilter=None, nostdin=False):
         Print any non-existent files.
         Returns a set of full paths.
     """
+    if not filenames:
+        # No arguments were given, user wants to use the CWD.
+        return None
+
     pathfilter = pathfilter or PathFilter.none
     filterpath = {
         PathFilter.none: lambda s: True,
@@ -524,13 +529,10 @@ def print_err(msg=None, ex=None):
                 msg = '\n'.join(msglines[:-1])
                 ex = msglines[-1]
 
-        errmsg = msg if NOERRCOLOR else C(msg, fore='red')
+        errmsg = C(msg, fore='red')
         sys.stderr.write('{}\n'.format(errmsg))
     if ex is not None:
-        if NOERRCOLOR:
-            exmsg = str(ex)
-        else:
-            exmsg = C(str(ex), fore='red', style='bright')
+        exmsg = C(str(ex), fore='red', style='bright')
         sys.stderr.write('    {}\n'.format(exmsg))
     sys.stderr.flush()
     return None
@@ -736,11 +738,11 @@ class PathFilter(Enum):
 class Editor(object):
     """ Holds information and helper methods for a single file and it's
         tags/comments.
-        __init__ possibly raises FileNotFoundError or ValueError (for no path).
+        __init__ possibly raises FileNotFoundError or ValueError (no path).
 
         Tags are comma-separated by default, and encoded using the system's
-        default encoding. This can be subclassed to handle different formats by
-        overriding the class methods parse_tagstr() and parse_taglist().
+        default encoding. This can be subclassed to handle different formats
+        by overriding the class methods parse_tagstr() and parse_taglist().
         The encoding can be changed by setting Editor.encoding.
         If all that is needed is a different separator, then Editor.tag_sep
         can be set.
@@ -884,7 +886,9 @@ class Editor(object):
             if ex.errno == self.errno_nodata:
                 return {}
             raise self.AttrError(
-                'Unable to list attributes for file: {}'.format(self.filepath),
+                'Unable to list attributes for file: {}'.format(
+                    self.filepath
+                ),
                 ex)
         return {aname: self.get_attr(aname) for aname in attrs}
 
@@ -894,7 +898,7 @@ class Editor(object):
             If `refresh` is truthy, or self.comment is not set, retrieve it.
         """
         if self.comment and (not refresh):
-            # Comment was already retrieved, and we're not refreshing the data.
+            # Comment was already retrieved, and we're not refreshing data.
             return self.comment
         comment = self.get_attr(self.attr_comment)
         if not comment:
@@ -940,11 +944,13 @@ class Editor(object):
         self.tags = self.get_tags()
         reflags = re.IGNORECASE if ignorecase else 0
         if reverse:
-            ismatch = lambda s: re.search(repat, s, reflags) is None
+            def ismatch(s):
+                return re.search(repat, s, reflags) is None
             # All tags must not match.
             boolfilter = all
         else:
-            ismatch = lambda s: re.search(repat, s, reflags) is not None
+            def ismatch(s):
+                return re.search(repat, s, reflags) is not None
             # Any tag may match.
             boolfilter = any
         if not self.tags:
@@ -1087,12 +1093,12 @@ class Editor(object):
 
 
 if __name__ == '__main__':
-    ARGD = docopt(USAGESTR, version=VERSIONSTR)
+    ARGD = docopt(USAGESTR, version=VERSIONSTR, script=SCRIPT)
     DEBUG = ARGD['--debug']
     QUIET = ARGD['--quiet']
     if ARGD['--nocolor']:
         # Override automatic detection.
-        NOCOLOR = NOERRCOLOR = True
+        colr_disable()
 
     try:
         MAINRET = main(ARGD)
